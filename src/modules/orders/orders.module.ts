@@ -3,10 +3,9 @@ import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { PaymentsModule } from '../payments/payments.module';
 import { TrustScoreMiddleware } from '../../common/middleware/trust-score.middleware';
-import { PrismaModule } from '../../database/prisma.module';
 
 @Module({
-  imports: [PaymentsModule, PrismaModule],
+  imports: [PaymentsModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],
