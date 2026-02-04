@@ -16,8 +16,6 @@ async function createHandler() {
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
   const configService = app.get(ConfigService);
 
-  app.use(helmet());
-
   const frontendUrls = (configService.get('FRONTEND_URL') || '')
     .split(',')
     .map((url) => url.trim())
@@ -32,10 +30,19 @@ async function createHandler() {
         'https://www.glovia.com.np',
       ];
 
+  // Configure CORS first, before helmet
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
+
+  // Configure helmet to not interfere with CORS
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+  }));
 
   app.use(compression());
 
@@ -76,7 +83,40 @@ async function createHandler() {
   return serverless(expressApp);
 }
 
+// Helper function to add CORS headers
+function addCorsHeaders(res, origin) {
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://glovia.com.np',
+    'https://www.glovia.com.np',
+  ];
+  
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (process.env.FRONTEND_URL) {
+    const frontendUrls = process.env.FRONTEND_URL.split(',')
+      .map((url) => url.trim())
+      .filter(Boolean);
+    if (frontendUrls.length > 0) {
+      res.setHeader('Access-Control-Allow-Origin', frontendUrls[0]);
+    }
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', 'https://glovia.com.np');
+  }
+  
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+}
+
 module.exports = async (req, res) => {
+  // Handle preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    addCorsHeaders(res, req.headers.origin);
+    return res.status(200).end();
+  }
+
   try {
     if (!cachedHandler) {
       cachedHandler = await createHandler();
@@ -84,6 +124,7 @@ module.exports = async (req, res) => {
     return cachedHandler(req, res);
   } catch (error) {
     console.error('Function invocation failed:', error);
+    addCorsHeaders(res, req.headers.origin);
     return res.status(500).json({
       error: 'Internal Server Error',
       message: error.message,
