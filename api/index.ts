@@ -2,15 +2,20 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import compression from 'compression';
 import helmet from 'helmet';
-import { AppModule } from './app.module';
+import serverless from 'serverless-http';
+import express from 'express';
+import { AppModule } from '../src/app.module';
 
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+let cachedHandler: ((req: any, res: any) => Promise<void>) | null = null;
+
+async function createHandler() {
+  const expressApp = express();
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
   const configService = app.get(ConfigService);
 
-  // Security
   app.use(helmet());
   const frontendUrls = (configService.get<string>('FRONTEND_URL') || '')
     .split(',')
@@ -18,17 +23,20 @@ async function bootstrap() {
     .filter(Boolean);
   const allowedOrigins = frontendUrls.length
     ? frontendUrls
-    : ['http://localhost:3000', 'http://localhost:3001'];
+    : [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'https://glovia.com.np',
+        'https://www.glovia.com.np',
+      ];
 
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
   });
 
-  // Compression
   app.use(compression());
 
-  // Validation
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -40,11 +48,9 @@ async function bootstrap() {
     }),
   );
 
-  // API Prefix
   const apiPrefix = configService.get('API_PREFIX') || 'api/v1';
   app.setGlobalPrefix(apiPrefix);
 
-  // Swagger Documentation
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
       .setTitle('Glovia Nepal API')
@@ -59,18 +65,19 @@ async function bootstrap() {
       .addTag('Payments', 'Payment processing')
       .addTag('Admin', 'Admin operations')
       .build();
-    
+
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
   }
 
-  const port = configService.get('PORT') || 3001;
-  await app.listen(port, '0.0.0.0');
-  
-  console.log(`🚀 Glovia Nepal API is running on: http://0.0.0.0:${port}/${apiPrefix}`);
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(`📚 API Documentation: http://localhost:${port}/api/docs`);
-  }
+  await app.init();
+  return serverless(expressApp);
 }
 
-bootstrap();
+export default async function handler(req: any, res: any) {
+  if (!cachedHandler) {
+    cachedHandler = await createHandler();
+  }
+
+  return cachedHandler(req, res);
+}
