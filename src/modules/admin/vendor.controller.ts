@@ -24,7 +24,7 @@ import { UploadService } from '../upload/upload.service';
 @ApiTags('Vendor')
 @Controller('vendor')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.VENDOR)
+@Roles(UserRole.VENDOR, UserRole.SUPER_ADMIN)
 @ApiBearerAuth()
 export class VendorController {
   constructor(
