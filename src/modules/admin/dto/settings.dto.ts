@@ -1,4 +1,4 @@
-import { IsNumber, Min } from 'class-validator';
+import { IsNumber, Min, IsBoolean, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -8,4 +8,24 @@ export class UpdateDeliverySettingsDto {
   @Type(() => Number)
   @Min(0)
   charge: number;
+}
+
+export class UpdateDiscountSettingsDto {
+  @ApiProperty({ description: 'Enable or disable discount', example: true })
+  @IsBoolean()
+  enabled: boolean;
+
+  @ApiProperty({ required: false, description: 'Discount percentage (0-100)', example: 10 })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  percentage?: number;
+
+  @ApiProperty({ required: false, description: 'Minimum order amount for discount in NPR', example: 1000 })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  @Min(0)
+  minOrderAmount?: number;
 }

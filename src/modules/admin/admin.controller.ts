@@ -25,7 +25,7 @@ import { OrderStatus } from '../../database/schemas/order.schema';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { CreateUserDto, UpdateUserRoleDto } from './dto/user.dto';
 import { UpdateOrderDto } from './dto/order.dto';
-import { UpdateDeliverySettingsDto } from './dto/settings.dto';
+import { UpdateDeliverySettingsDto, UpdateDiscountSettingsDto } from './dto/settings.dto';
 import { UpdateAnnouncementDto } from './dto/announcement.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UploadService } from '../upload/upload.service';
@@ -241,6 +241,18 @@ export class AdminController {
   @ApiOperation({ summary: 'Update announcement bar' })
   updateAnnouncement(@Body() dto: UpdateAnnouncementDto) {
     return this.adminService.updateAnnouncementBar(dto);
+  }
+
+  @Get('settings/discount')
+  @ApiOperation({ summary: 'Get discount settings' })
+  getDiscountSettings() {
+    return this.adminService.getDiscountSettings();
+  }
+
+  @Put('settings/discount')
+  @ApiOperation({ summary: 'Update discount settings' })
+  updateDiscountSettings(@Body() dto: UpdateDiscountSettingsDto) {
+    return this.adminService.updateDiscountSettings(dto);
   }
 
   @Post('init')
