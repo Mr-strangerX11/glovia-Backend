@@ -1,7 +1,7 @@
 {
   "version": 2,
+  "installCommand": "npm install --production=false",
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
   "routes": [
     { "src": "/(.*)", "dest": "/api/index.js" }
   ]
