@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
+  "buildCommand": "npm run build && echo 'Build complete'",
   "public": false,
   "routes": [
-    { "src": "/(.*)", "dest": "/api" }
+    { "src": "/(.*)", "dest": "/api/index.js" }
   ]
 }

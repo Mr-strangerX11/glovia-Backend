@@ -1,12 +1,19 @@
-const express = require('express');
-const helmet = require('helmet');
-const compression = require('compression');
-const { NestFactory } = require('@nestjs/core');
-const { ValidationPipe } = require('@nestjs/common');
-const { SwaggerModule, DocumentBuilder } = require('@nestjs/swagger');
-const { ConfigService } = require('@nestjs/config');
-const { ExpressAdapter } = require('@nestjs/platform-express');
-const { AppModule } = require('../dist/src/app.module');
+const path = require('path');
+
+// Try loading from dist/src first, fallback to src for development
+let AppModule;
+try {
+  AppModule = require(path.join(__dirname, '../dist/src/app.module')).AppModule;
+} catch (err) {
+  console.error('Failed to load compiled module from dist/src:', err.message);
+  console.error('Trying alternative path...');
+  try {
+    AppModule = require(path.join(__dirname, '../src/app.module')).AppModule;
+  } catch (err2) {
+    console.error('Both module loads failed. Build may not have completed.');
+    throw new Error(`Cannot find AppModule. ${err.message}`);
+  }
+}
 
 let cachedHandler = null;
 
