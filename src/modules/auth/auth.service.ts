@@ -2,15 +2,18 @@ import { Injectable, UnauthorizedException, ConflictException, BadRequestExcepti
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
 import { RegisterDto, LoginDto, ForgotPasswordDto, ResetPasswordDto, VerifyEmailOtpDto } from './dto/auth.dto';
-import { UserRole } from '@prisma/client';
+import { User, UserRole } from '../../database/schemas/user.schema';
+import { OtpVerification } from '../../database/schemas/otp-verification.schema';
 import { OtpService, EmailOtpService } from '../verification/otp.service';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
+    @InjectModel(User.name) private userModel: Model<User>,
+    @InjectModel(OtpVerification.name) private otpVerificationModel: Model<OtpVerification>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private otpService: OtpService,
@@ -18,14 +21,9 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto, ipAddress?: string, deviceFingerprint?: string) {
-    const existingUser = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: dto.email },
-          { phone: dto.phone },
-        ],
-      },
-    });
+    const existingUser = await this.userModel.findOne({
+      $or: [{ email: dto.email }, { phone: dto.phone }],
+    }).lean();
 
     if (existingUser) {
       throw new ConflictException('Email or phone already exists');
@@ -33,44 +31,27 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        phone: dto.phone,
-        password: hashedPassword,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        role: UserRole.CUSTOMER,
-        ipAddress,
-        deviceFingerprint,
-        isEmailVerified: false, // Not verified yet
-      },
-      select: {
-        id: true,
-        email: true,
-        phone: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        trustScore: true,
-        isEmailVerified: true,
-        isPhoneVerified: true,
-        createdAt: true,
-      },
+    const user = await this.userModel.create({
+      email: dto.email,
+      phone: dto.phone,
+      password: hashedPassword,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      role: UserRole.CUSTOMER,
+      ipAddress,
+      deviceFingerprint,
+      isEmailVerified: false,
     });
 
-    // Generate and send email OTP
     const otp = this.otpService.generateOtp();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    await this.prisma.otpVerification.create({
-      data: {
-        userId: user.id,
-        phone: user.email, // Use email field as identifier for email OTP
-        otp,
-        purpose: 'email_verification',
-        expiresAt,
-      },
+    await this.otpVerificationModel.create({
+      userId: user._id,
+      phone: user.email,
+      otp,
+      purpose: 'email_verification',
+      expiresAt,
     });
 
     const sent = await this.emailOtpService.sendEmailOtp(user.email, otp, 'email_verification');
@@ -78,10 +59,9 @@ export class AuthService {
       throw new BadRequestException('Failed to send verification email');
     }
 
-    // Return message without tokens until email is verified
     return {
       message: 'Registration successful. Please verify your email to complete signup.',
-      userId: user.id,
+      userId: user._id.toString(),
       email: user.email,
       isEmailVerified: false,
     };
@@ -90,27 +70,26 @@ export class AuthService {
   async login(dto: LoginDto, ipAddress?: string) {
     const user = await this.validateUser(dto.email, dto.password);
 
-    // Block login if email not verified
     if (!user.isEmailVerified) {
       throw new ForbiddenException('Please verify your email before logging in. Check your inbox for verification code.');
     }
 
-    // Update last login
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
+    await this.userModel.findByIdAndUpdate(
+      user._id,
+      {
         lastLoginAt: new Date(),
         ipAddress,
         failedAttempts: 0,
       },
-    });
-    
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+      { new: true },
+    );
+
+    const tokens = await this.generateTokens(user._id.toString(), user.email, user.role);
+    await this.updateRefreshToken(user._id.toString(), tokens.refreshToken);
 
     return {
       user: {
-        id: user.id,
+        id: user._id.toString(),
         email: user.email,
         phone: user.phone,
         firstName: user.firstName,
@@ -125,9 +104,7 @@ export class AuthService {
   }
 
   async validateUser(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await this.userModel.findOne({ email }).lean();
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
@@ -139,11 +116,11 @@ export class AuthService {
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      // Increment failed attempts
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { failedAttempts: { increment: 1 } },
-      });
+      await this.userModel.findByIdAndUpdate(
+        user._id,
+        { $inc: { failedAttempts: 1 } },
+        { new: true },
+      );
 
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -173,17 +150,16 @@ export class AuthService {
 
   async updateRefreshToken(userId: string, refreshToken: string) {
     const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
-    
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { refreshToken: hashedRefreshToken },
-    });
+
+    await this.userModel.findByIdAndUpdate(
+      userId,
+      { refreshToken: hashedRefreshToken },
+      { new: true },
+    );
   }
 
   async refreshTokens(userId: string, refreshToken: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await this.userModel.findById(new Types.ObjectId(userId)).lean();
 
     if (!user || !user.refreshToken) {
       throw new UnauthorizedException('Access denied');
@@ -198,22 +174,20 @@ export class AuthService {
       throw new UnauthorizedException('Access denied');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+    const tokens = await this.generateTokens(user._id.toString(), user.email, user.role);
+    await this.updateRefreshToken(user._id.toString(), tokens.refreshToken);
 
     return tokens;
   }
 
   async logout(userId: string) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { refreshToken: null },
-    });
+    await this.userModel.findByIdAndUpdate(
+      userId,
+      { refreshToken: null },
+      { new: true },
+    );
   }
 
-  /**
-   * Forgot password: generate OTP for password reset via email
-   */
   async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
     const { email } = dto;
 
@@ -221,7 +195,7 @@ export class AuthService {
       throw new BadRequestException('Provide email');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.userModel.findOne({ email }).lean();
     if (!user) {
       throw new NotFoundException('User with this email not found');
     }
@@ -229,14 +203,12 @@ export class AuthService {
     const otp = this.otpService.generateOtp();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    await this.prisma.otpVerification.create({
-      data: {
-        userId: user.id,
-        phone: email, // reuse phone field as identifier for email OTPs
-        otp,
-        purpose: 'password_reset',
-        expiresAt,
-      },
+    await this.otpVerificationModel.create({
+      userId: user._id,
+      phone: email,
+      otp,
+      purpose: 'password_reset',
+      expiresAt,
     });
 
     const sent = await this.emailOtpService.sendEmailOtp(email, otp, 'password_reset');
@@ -247,28 +219,22 @@ export class AuthService {
     return { message: 'Password reset OTP sent to your email' };
   }
 
-  /**
-   * Reset password using email + OTP
-   */
   async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
     const { email, otp, newPassword } = dto;
 
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.userModel.findOne({ email }).lean();
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    const otpRecord = await this.prisma.otpVerification.findFirst({
-      where: {
-        userId: user.id,
-        phone: email, // stored under phone field
-        otp,
-        purpose: 'password_reset',
-        isVerified: false,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const otpRecord = await this.otpVerificationModel.findOne({
+      userId: user._id,
+      phone: email,
+      otp,
+      purpose: 'password_reset',
+      isVerified: false,
+      expiresAt: { $gt: new Date() },
+    }).sort({ createdAt: -1 }).lean();
 
     if (!otpRecord) {
       throw new BadRequestException('Invalid or expired OTP');
@@ -280,48 +246,41 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          password: hashedPassword,
-          refreshToken: null,
-          failedAttempts: 0,
-        },
-      }),
-      this.prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: { isVerified: true, attempts: { increment: 1 } },
-      }),
-    ]);
+    await this.userModel.findByIdAndUpdate(
+      user._id,
+      {
+        password: hashedPassword,
+        refreshToken: null,
+        failedAttempts: 0,
+      },
+      { new: true },
+    );
+
+    await this.otpVerificationModel.findByIdAndUpdate(
+      otpRecord._id,
+      { $set: { isVerified: true }, $inc: { attempts: 1 } },
+      { new: true },
+    );
 
     return { message: 'Password reset successfully' };
   }
 
-  /**
-   * Verify email OTP after registration
-   * Must be verified before user can login
-   */
   async verifyEmailOtp(dto: VerifyEmailOtpDto): Promise<{ message: string; user: any; accessToken: string; refreshToken: string }> {
     const { email, otp } = dto;
 
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.userModel.findOne({ email }).lean();
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    // Find matching email OTP
-    const otpRecord = await this.prisma.otpVerification.findFirst({
-      where: {
-        userId: user.id,
-        phone: email, // Stored as phone field for email OTP
-        otp,
-        purpose: 'email_verification',
-        isVerified: false,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const otpRecord = await this.otpVerificationModel.findOne({
+      userId: user._id,
+      phone: email,
+      otp,
+      purpose: 'email_verification',
+      isVerified: false,
+      expiresAt: { $gt: new Date() },
+    }).sort({ createdAt: -1 }).lean();
 
     if (!otpRecord) {
       throw new BadRequestException('Invalid or expired verification code');
@@ -331,35 +290,31 @@ export class AuthService {
       throw new BadRequestException('Too many failed attempts. Please request a new code.');
     }
 
-    // Mark OTP as verified and mark email as verified
-    await this.prisma.$transaction([
-      this.prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: { isVerified: true, attempts: { increment: 1 } },
-      }),
-      this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          isEmailVerified: true,
-          trustScore: { increment: 20 }, // Reward for email verification
-        },
-      }),
-    ]);
+    await this.otpVerificationModel.findByIdAndUpdate(
+      otpRecord._id,
+      { $set: { isVerified: true }, $inc: { attempts: 1 } },
+      { new: true },
+    );
 
-    // Generate tokens and allow access
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+    const updatedUser = await this.userModel.findByIdAndUpdate(
+      user._id,
+      { isEmailVerified: true, $inc: { trustScore: 20 } },
+      { new: true },
+    ).lean();
+
+    const tokens = await this.generateTokens(updatedUser._id.toString(), updatedUser.email, updatedUser.role);
+    await this.updateRefreshToken(updatedUser._id.toString(), tokens.refreshToken);
 
     return {
       message: 'Email verified successfully',
       user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
+        id: updatedUser._id.toString(),
+        email: updatedUser.email,
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        role: updatedUser.role,
         isEmailVerified: true,
-        trustScore: user.trustScore + 20,
+        trustScore: updatedUser.trustScore,
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,

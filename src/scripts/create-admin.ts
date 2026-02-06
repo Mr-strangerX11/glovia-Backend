@@ -1,93 +1,53 @@
-import { PrismaClient, UserRole } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
-import { randomBytes } from 'crypto';
+import * as mongoose from 'mongoose';
+import * as bcrypt from 'bcrypt';
+import { config } from 'dotenv';
+import { User, UserSchema, UserRole } from '../database/schemas/user.schema';
 
-const prisma = new PrismaClient();
+config();
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const result: { email?: string; password?: string; role?: string; firstName?: string; lastName?: string } = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('--')) {
-      const key = arg.replace(/^--/, '');
-      const value = args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
-      if (value) {
-        (result as any)[key] = value;
-        i++;
-      } else {
-        (result as any)[key] = 'true';
-      }
-    }
-  }
-  return result;
-}
+async function createAdmin() {
+  const mongoUri = process.env.DATABASE_URL;
 
-function generatePassword(length = 16) {
-  // URL-safe random string
-  return randomBytes(length).toString('base64url');
-}
-
-async function main() {
-  const { email, password, role, firstName, lastName } = parseArgs();
-
-  const userEmail = email || 'admin@glovia.local';
-  const userRole = (role || 'SUPER_ADMIN').toUpperCase();
-  const userFirstName = firstName || 'Admin';
-  const userLastName = lastName || 'User';
-
-  if (!Object.keys(UserRole).includes(userRole)) {
-    console.error(`Invalid role: ${userRole}. Use one of: ${Object.keys(UserRole).join(', ')}`);
-    process.exit(1);
+  if (!mongoUri) {
+    throw new Error('DATABASE_URL is not set');
   }
 
-  const plainPassword = password || generatePassword(12);
-  const hashedPassword = await bcrypt.hash(plainPassword, 10);
+  await mongoose.connect(mongoUri);
 
-  const existing = await prisma.user.findUnique({ where: { email: userEmail } });
+  const UserModel = mongoose.model<User>('User', UserSchema);
 
-  let user;
+  const email = process.env.DEFAULT_ADMIN_EMAIL || 'admin@glovia.com.np';
+  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'AdminPass123!';
+
+  const existing = await UserModel.findOne({ email }).lean();
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
   if (existing) {
-    user = await prisma.user.update({
-      where: { id: existing.id },
-      data: {
-        password: hashedPassword,
-        role: userRole as UserRole,
-        firstName: userFirstName,
-        lastName: userLastName,
-        isEmailVerified: true,
-      },
-      select: { id: true, email: true, role: true, firstName: true, lastName: true, createdAt: true },
+    await UserModel.findByIdAndUpdate(existing._id, {
+      password: hashedPassword,
+      role: UserRole.SUPER_ADMIN,
+      isEmailVerified: true,
+      isPhoneVerified: true,
     });
-    console.log('✅ Updated existing user to admin');
+    console.log('Admin user updated');
   } else {
-    user = await prisma.user.create({
-      data: {
-        email: userEmail,
-        password: hashedPassword,
-        firstName: userFirstName,
-        lastName: userLastName,
-        role: userRole as UserRole,
-        isEmailVerified: true,
-      },
-      select: { id: true, email: true, role: true, firstName: true, lastName: true, createdAt: true },
+    await UserModel.create({
+      email,
+      password: hashedPassword,
+      firstName: 'Admin',
+      lastName: 'User',
+      role: UserRole.SUPER_ADMIN,
+      isEmailVerified: true,
+      isPhoneVerified: true,
     });
-    console.log('✅ Created new admin user');
+    console.log('Admin user created');
   }
 
-  console.log('\nAdmin Credentials');
-  console.log('-----------------');
-  console.log(`Email:    ${user.email}`);
-  console.log(`Role:     ${user.role}`);
-  console.log(`Password: ${plainPassword}`);
-  console.log('\nStore this password securely. You can change it after login.');
+  await mongoose.disconnect();
 }
 
-main()
-  .catch((e) => {
-    console.error('❌ Failed to create admin:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+createAdmin().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

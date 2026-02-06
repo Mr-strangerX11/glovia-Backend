@@ -1,6 +1,6 @@
 import { IsString, IsNumber, IsBoolean, IsOptional, IsArray, IsEnum, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { SkinType, ProductCategory } from '@prisma/client';
+import { SkinType } from '../../../database/schemas/user.schema';
 
 export class CreateProductDto {
   @ApiProperty()

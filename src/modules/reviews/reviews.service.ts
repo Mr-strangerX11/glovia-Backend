@@ -1,75 +1,98 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
 import { CreateReviewDto } from './dto/reviews.dto';
+import { Review } from '../../database/schemas/review.schema';
+import { Product } from '../../database/schemas/product.schema';
+import { OrderItem } from '../../database/schemas/order-item.schema';
+import { Order, OrderStatus } from '../../database/schemas/order.schema';
+import { User } from '../../database/schemas/user.schema';
 
 @Injectable()
 export class ReviewsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel(Review.name) private reviewModel: Model<Review>,
+    @InjectModel(Product.name) private productModel: Model<Product>,
+    @InjectModel(OrderItem.name) private orderItemModel: Model<OrderItem>,
+    @InjectModel(Order.name) private orderModel: Model<Order>,
+    @InjectModel(User.name) private userModel: Model<User>,
+  ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
-    const product = await this.prisma.product.findUnique({
-      where: { id: dto.productId },
-    });
+    if (!Types.ObjectId.isValid(dto.productId)) {
+      throw new BadRequestException('Invalid product ID');
+    }
 
+    const product = await this.productModel.findById(dto.productId).lean();
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
-    const hasPurchased = await this.prisma.orderItem.findFirst({
-      where: {
-        productId: dto.productId,
-        order: {
-          userId,
-          status: 'DELIVERED',
-        },
-      },
-    });
+    // Check if user has purchased this product
+    const orderItems = await this.orderItemModel.find({
+      productId: new Types.ObjectId(dto.productId)
+    }).lean();
 
-    const existingReview = await this.prisma.review.findFirst({
-      where: {
-        userId,
-        productId: dto.productId,
-      },
-    });
+    const orderIds = orderItems.map(item => item.orderId);
+    const hasPurchased = await this.orderModel.findOne({
+      _id: { $in: orderIds },
+      userId: new Types.ObjectId(userId),
+      status: OrderStatus.DELIVERED
+    }).lean();
+
+    // Check for existing review
+    const existingReview = await this.reviewModel.findOne({
+      userId: new Types.ObjectId(userId),
+      productId: new Types.ObjectId(dto.productId)
+    }).lean();
 
     if (existingReview) {
       throw new BadRequestException('You have already reviewed this product');
     }
 
-    return this.prisma.review.create({
-      data: {
-        ...dto,
-        userId,
-        isVerified: !!hasPurchased,
-      },
-      include: {
-        user: {
-          select: {
-            firstName: true,
-            lastName: true,
-            profileImage: true,
-          },
-        },
-      },
+    const review = new this.reviewModel({
+      ...dto,
+      userId: new Types.ObjectId(userId),
+      productId: new Types.ObjectId(dto.productId),
+      isVerified: !!hasPurchased,
+      approved: false
     });
+
+    const savedReview = await review.save();
+
+    // Get user details
+    const user = await this.userModel.findById(userId).select('firstName lastName profileImage').lean();
+
+    return {
+      ...savedReview.toObject(),
+      user
+    };
   }
 
   async findByProduct(productId: string) {
-    return this.prisma.review.findMany({
-      where: {
-        productId,
-        isApproved: true,
-      },
-      include: {
-        user: {
-          select: {
-            firstName: true,
-            lastName: true,
-            profileImage: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    if (!Types.ObjectId.isValid(productId)) {
+      throw new BadRequestException('Invalid product ID');
+    }
+
+    const reviews = await this.reviewModel.find({
+      productId: new Types.ObjectId(productId),
+      approved: true
+    }).sort({ createdAt: -1 }).lean();
+
+    // Get user details
+    const userIds = [...new Set(reviews.map(r => r.userId.toString()))];
+    const users = await this.userModel.find({
+      _id: { $in: userIds }
+    }).select('firstName lastName profileImage').lean();
+
+    const userMap = users.reduce((acc, u) => {
+      acc[u._id.toString()] = u;
+      return acc;
+    }, {} as Record<string, any>);
+
+    return reviews.map(review => ({
+      ...review,
+      user: userMap[review.userId.toString()] || null
+    }));
   }
 }

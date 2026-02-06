@@ -1,14 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Banner } from '../../database/schemas/banner.schema';
 
 @Injectable()
 export class BannersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel(Banner.name) private bannerModel: Model<Banner>,
+  ) {}
 
   async findAll() {
-    return this.prisma.banner.findMany({
-      where: { isActive: true },
-      orderBy: { displayOrder: 'asc' },
-    });
+    return this.bannerModel.find({
+      isActive: true,
+    }).sort({ displayOrder: 1 }).lean();
   }
 }

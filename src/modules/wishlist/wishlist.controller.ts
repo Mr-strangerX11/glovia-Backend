@@ -23,12 +23,12 @@ export class WishlistController {
     @CurrentUser('id') userId: string,
     @Body() data: { productId: string },
   ) {
-    return this.wishlistService.addItem(userId, data.productId);
+    return this.wishlistService.addToWishlist(userId, data.productId);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Remove item from wishlist' })
   removeItem(@CurrentUser('id') userId: string, @Param('id') itemId: string) {
-    return this.wishlistService.removeItem(userId, itemId);
+    return this.wishlistService.removeFromWishlist(userId, itemId);
   }
 }

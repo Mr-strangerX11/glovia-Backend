@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '../../database/schemas/user.schema';
 import { AdminService } from './admin.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 
@@ -22,11 +22,10 @@ export class VendorController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.adminService.getAllProducts({
-      search,
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-    });
+    return this.adminService.getAllProducts(
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 10
+    );
   }
 
   @Get('products/:id')

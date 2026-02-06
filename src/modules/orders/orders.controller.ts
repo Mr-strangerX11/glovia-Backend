@@ -13,7 +13,7 @@ import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateOrderDto } from './dto/orders.dto';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus } from '../../database/schemas/order.schema';
 
 @ApiTags('Orders')
 @Controller('orders')

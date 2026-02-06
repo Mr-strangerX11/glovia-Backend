@@ -1,6 +1,6 @@
 import { IsEnum, IsOptional, IsString, IsNumber, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus } from '../../../database/schemas/order.schema';
 import { Type } from 'class-transformer';
 
 export class UpdateOrderDto {

@@ -1,6 +1,8 @@
 import { Injectable, NestMiddleware, ForbiddenException } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { User } from '../../database/schemas/user.schema';
 
 /**
  * Trust Score Guard Middleware
@@ -8,7 +10,9 @@ import { PrismaService } from '../../database/prisma.service';
  */
 @Injectable()
 export class TrustScoreMiddleware implements NestMiddleware {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel(User.name) private userModel: Model<User>,
+  ) {}
 
   async use(req: Request, res: Response, next: NextFunction) {
     const user = (req as any).user;
@@ -18,15 +22,9 @@ export class TrustScoreMiddleware implements NestMiddleware {
     }
 
     // Fetch user trust score
-    const userRecord = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      select: {
-        trustScore: true,
-        isEmailVerified: true,
-        isPhoneVerified: true,
-        isBlocked: true,
-      },
-    });
+    const userRecord = await this.userModel.findById(new Types.ObjectId(user.id))
+      .select('trustScore isEmailVerified isPhoneVerified isBlocked')
+      .lean();
 
     if (!userRecord) {
       throw new ForbiddenException('User not found');

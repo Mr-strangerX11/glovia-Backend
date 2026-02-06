@@ -6,7 +6,7 @@ const { ValidationPipe } = require('@nestjs/common');
 const { SwaggerModule, DocumentBuilder } = require('@nestjs/swagger');
 const { ConfigService } = require('@nestjs/config');
 const { ExpressAdapter } = require('@nestjs/platform-express');
-const { AppModule } = require('../dist/app.module');
+const { AppModule } = require('../dist/src/app.module');
 
 let cachedHandler = null;
 

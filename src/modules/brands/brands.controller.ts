@@ -14,6 +14,7 @@ import { CreateBrandDto, UpdateBrandDto } from './dto/brand.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '../../database/schemas/user.schema';
 
 @Controller('brands')
 export class BrandsController {
@@ -54,7 +55,7 @@ export class BrandsController {
   // Admin only endpoints
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPER_ADMIN')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   async createBrand(@Body() dto: CreateBrandDto) {
     const brand = await this.brandsService.createBrand(dto);
     return {
@@ -66,7 +67,7 @@ export class BrandsController {
 
   @Put(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPER_ADMIN')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   async updateBrand(@Param('id') id: string, @Body() dto: UpdateBrandDto) {
     const brand = await this.brandsService.updateBrand(id, dto);
     return {
@@ -78,7 +79,7 @@ export class BrandsController {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPER_ADMIN')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   async deleteBrand(@Param('id') id: string) {
     await this.brandsService.deleteBrand(id);
     return {
@@ -90,7 +91,7 @@ export class BrandsController {
   // Admin analytics endpoint
   @Get('admin/analytics')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPER_ADMIN')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   async getBrandAnalytics() {
     const analytics = await this.brandsService.getBrandAnalytics();
     return {

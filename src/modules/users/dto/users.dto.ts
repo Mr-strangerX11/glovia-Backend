@@ -1,6 +1,6 @@
 import { IsString, IsOptional, IsEnum, IsBoolean, IsInt, Min, Max } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { SkinType } from '@prisma/client';
+import { SkinType } from '../../../database/schemas/user.schema';
 
 export class UpdateProfileDto {
   @ApiProperty({ required: false })

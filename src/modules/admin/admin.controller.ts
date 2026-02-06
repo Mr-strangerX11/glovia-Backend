@@ -15,7 +15,8 @@ import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole, OrderStatus } from '@prisma/client';
+import { UserRole } from '../../database/schemas/user.schema';
+import { OrderStatus } from '../../database/schemas/order.schema';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { CreateUserDto } from './dto/user.dto';
 import { UpdateOrderDto } from './dto/order.dto';
@@ -80,35 +81,29 @@ export class AdminController {
   @Get('orders')
   @ApiOperation({ summary: 'Get all orders' })
   getAllOrders(
-    @Query('status') status?: OrderStatus,
+    @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.adminService.getAllOrders({
-      status,
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-    });
-  }
-
-  @Get('orders/:id')
-  @ApiOperation({ summary: 'Get order details' })
-  getOrder(@Param('id') id: string) {
-    return this.adminService.getOrder(id);
+    return this.adminService.getAllOrders(
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 10,
+      status as any
+    );
   }
 
   @Put('orders/:id')
-  @ApiOperation({ summary: 'Update order' })
+  @ApiOperation({ summary: 'Update order status' })
   updateOrder(@Param('id') id: string, @Body() dto: UpdateOrderDto) {
-    return this.adminService.updateOrder(id, dto);
+    return this.adminService.updateOrderStatus(id, dto.status);
   }
 
   @Get('customers')
   @ApiOperation({ summary: 'Get all customers' })
   getAllCustomers(@Query('page') page?: string, @Query('limit') limit?: string) {
     return this.adminService.getAllCustomers(
-      page ? Number(page) : undefined,
-      limit ? Number(limit) : undefined,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 10
     );
   }
 
@@ -119,11 +114,11 @@ export class AdminController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.adminService.getAllReviews({
-      isApproved: isApproved === 'true',
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-    });
+    return this.adminService.getAllReviews(
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 10,
+      isApproved ? isApproved === 'true' : undefined
+    );
   }
 
   @Patch('reviews/:id/approve')
@@ -139,26 +134,26 @@ export class AdminController {
   }
 
   @Get('settings/delivery')
-  @ApiOperation({ summary: 'Get delivery settings' })
+  @ApiOperation({ summary: 'Get delivery charge' })
   getDeliverySettings() {
-    return this.adminService.getDeliverySettings();
+    return this.adminService.getDeliveryCharge();
   }
 
   @Put('settings/delivery')
-  @ApiOperation({ summary: 'Update delivery settings (discount and free delivery)' })
+  @ApiOperation({ summary: 'Update delivery charge' })
   updateDeliverySettings(@Body() dto: UpdateDeliverySettingsDto) {
-    return this.adminService.updateDeliverySettings(dto);
+    return this.adminService.updateDeliveryCharge(dto.charge);
   }
 
   @Get('settings/announcement')
   @ApiOperation({ summary: 'Get announcement bar settings' })
   getAnnouncement() {
-    return this.adminService.getAnnouncement();
+    return this.adminService.getAnnouncementBar();
   }
 
   @Put('settings/announcement')
   @ApiOperation({ summary: 'Update announcement bar' })
   updateAnnouncement(@Body() dto: UpdateAnnouncementDto) {
-    return this.adminService.updateAnnouncement(dto);
+    return this.adminService.updateAnnouncementBar(dto);
   }
 }

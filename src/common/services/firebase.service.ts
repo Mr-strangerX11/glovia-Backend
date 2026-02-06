@@ -17,6 +17,7 @@ export class FirebaseService {
   private storage: any;
   private auth: any;
   private firestore: any;
+  private isInitialized = false;
 
   constructor(private configService: ConfigService) {
     this.initializeFirebase();
@@ -40,6 +41,11 @@ export class FirebaseService {
         ),
       };
 
+      if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+        console.warn('Firebase config missing. Skipping Firebase init.');
+        return;
+      }
+
       // Initialize Firebase App
       try {
         this.firebaseApp = getApp();
@@ -51,11 +57,18 @@ export class FirebaseService {
       this.storage = getStorage(this.firebaseApp);
       this.auth = getAuth(this.firebaseApp);
       this.firestore = getFirestore(this.firebaseApp);
+      this.isInitialized = true;
 
       console.log('Firebase initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Firebase:', error);
-      throw error;
+      this.isInitialized = false;
+    }
+  }
+
+  private ensureInitialized() {
+    if (!this.isInitialized) {
+      throw new Error('Firebase not initialized. Check environment settings.');
     }
   }
 
@@ -68,6 +81,7 @@ export class FirebaseService {
     file: Buffer,
   ): Promise<string> {
     try {
+      this.ensureInitialized();
       const fileRef = ref(this.storage, `${folder}/${fileName}`);
       const result = await uploadBytes(fileRef, file);
       return result.metadata.fullPath;
@@ -82,6 +96,7 @@ export class FirebaseService {
    */
   async downloadFile(filePath: string): Promise<any> {
     try {
+      this.ensureInitialized();
       const fileRef = ref(this.storage, filePath);
       const fileBuffer = await getBytes(fileRef);
       return Buffer.from(fileBuffer);
@@ -96,6 +111,7 @@ export class FirebaseService {
    */
   async deleteFile(filePath: string): Promise<void> {
     try {
+      this.ensureInitialized();
       const fileRef = ref(this.storage, filePath);
       await deleteObject(fileRef);
     } catch (error) {
@@ -108,6 +124,7 @@ export class FirebaseService {
    * Get Firebase Auth instance
    */
   getAuth() {
+    this.ensureInitialized();
     return this.auth;
   }
 
@@ -115,6 +132,7 @@ export class FirebaseService {
    * Get Firebase Firestore instance
    */
   getFirestore() {
+    this.ensureInitialized();
     return this.firestore;
   }
 
@@ -122,6 +140,7 @@ export class FirebaseService {
    * Get Firebase Storage instance
    */
   getStorage() {
+    this.ensureInitialized();
     return this.storage;
   }
 }

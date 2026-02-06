@@ -1,22 +1,23 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../database/prisma.service';
-import { PaymentMethod, PaymentStatus, OrderStatus } from '@prisma/client';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { Payment, Order, PaymentMethod, PaymentStatus, OrderStatus } from '../../database/schemas';
 import * as crypto from 'crypto';
 import axios from 'axios';
 
 @Injectable()
 export class PaymentsService {
   constructor(
-    private prisma: PrismaService,
+    @InjectModel('Payment') private paymentModel: Model<Payment>,
+    @InjectModel('Order') private orderModel: Model<Order>,
     private configService: ConfigService,
   ) {}
 
   async initiateEsewaPayment(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: { payment: true },
-    });
+    const order = await this.orderModel
+      .findById(orderId)
+      .lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -49,10 +50,9 @@ export class PaymentsService {
     amt: string;
     refId: string;
   }) {
-    const order = await this.prisma.order.findUnique({
-      where: { orderNumber: data.oid },
-      include: { payment: true },
-    });
+    const order = await this.orderModel
+      .findOne({ orderNumber: data.oid })
+      .lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -69,25 +69,22 @@ export class PaymentsService {
       });
 
       if (response.data.includes('Success')) {
-        await this.prisma.$transaction([
-          this.prisma.payment.update({
-            where: { orderId: order.id },
-            data: {
-              status: PaymentStatus.COMPLETED,
-              transactionId: data.refId,
-              paidAt: new Date(),
-              gatewayResponse: data,
-            },
-          }),
-          this.prisma.order.update({
-            where: { id: order.id },
-            data: {
-              paymentStatus: PaymentStatus.COMPLETED,
-              status: OrderStatus.CONFIRMED,
-              confirmedAt: new Date(),
-            },
-          }),
-        ]);
+        await this.paymentModel.findOneAndUpdate(
+          { orderId: new Types.ObjectId(order._id) },
+          {
+            status: PaymentStatus.COMPLETED,
+            transactionId: data.refId,
+            paidAt: new Date(),
+            gatewayResponse: data,
+          },
+          { new: true }
+        );
+
+        await this.orderModel.findByIdAndUpdate(order._id, {
+          paymentStatus: PaymentStatus.COMPLETED,
+          status: OrderStatus.CONFIRMED,
+          confirmedAt: new Date(),
+        });
 
         return { success: true, message: 'Payment verified successfully' };
       }
@@ -99,9 +96,7 @@ export class PaymentsService {
   }
 
   async initiateKhaltiPayment(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
+    const order = await this.orderModel.findById(orderId).lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -116,7 +111,7 @@ export class PaymentsService {
       amount: Number(order.total) * 100,
       productIdentity: order.orderNumber,
       productName: `Order #${order.orderNumber}`,
-      productUrl: `${this.configService.get('FRONTEND_URL')}/orders/${order.id}`,
+      productUrl: `${this.configService.get('FRONTEND_URL')}/orders/${order._id}`,
     };
 
     return khaltiConfig;
@@ -127,9 +122,7 @@ export class PaymentsService {
     amount: number;
     orderId: string;
   }) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: data.orderId },
-    });
+    const order = await this.orderModel.findById(data.orderId).lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -150,25 +143,22 @@ export class PaymentsService {
       );
 
       if (response.data.state?.name === 'Completed') {
-        await this.prisma.$transaction([
-          this.prisma.payment.update({
-            where: { orderId: order.id },
-            data: {
-              status: PaymentStatus.COMPLETED,
-              transactionId: response.data.idx,
-              paidAt: new Date(),
-              gatewayResponse: response.data,
-            },
-          }),
-          this.prisma.order.update({
-            where: { id: order.id },
-            data: {
-              paymentStatus: PaymentStatus.COMPLETED,
-              status: OrderStatus.CONFIRMED,
-              confirmedAt: new Date(),
-            },
-          }),
-        ]);
+        await this.paymentModel.findOneAndUpdate(
+          { orderId: new Types.ObjectId(order._id) },
+          {
+            status: PaymentStatus.COMPLETED,
+            transactionId: response.data.idx,
+            paidAt: new Date(),
+            gatewayResponse: response.data,
+          },
+          { new: true }
+        );
+
+        await this.orderModel.findByIdAndUpdate(order._id, {
+          paymentStatus: PaymentStatus.COMPLETED,
+          status: OrderStatus.CONFIRMED,
+          confirmedAt: new Date(),
+        });
 
         return { success: true, message: 'Payment verified successfully' };
       }
@@ -180,9 +170,7 @@ export class PaymentsService {
   }
 
   async initiateIMEPayment(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
+    const order = await this.orderModel.findById(orderId).lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -214,9 +202,9 @@ export class PaymentsService {
     RefId: string;
     Msisdn: string;
   }) {
-    const order = await this.prisma.order.findUnique({
-      where: { orderNumber: data.RefId },
-    });
+    const order = await this.orderModel
+      .findOne({ orderNumber: data.RefId })
+      .lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -232,25 +220,22 @@ export class PaymentsService {
       );
 
       if (response.data.ResponseCode === '0') {
-        await this.prisma.$transaction([
-          this.prisma.payment.update({
-            where: { orderId: order.id },
-            data: {
-              status: PaymentStatus.COMPLETED,
-              transactionId: data.TransactionId,
-              paidAt: new Date(),
-              gatewayResponse: data,
-            },
-          }),
-          this.prisma.order.update({
-            where: { id: order.id },
-            data: {
-              paymentStatus: PaymentStatus.COMPLETED,
-              status: OrderStatus.CONFIRMED,
-              confirmedAt: new Date(),
-            },
-          }),
-        ]);
+        await this.paymentModel.findOneAndUpdate(
+          { orderId: new Types.ObjectId(order._id) },
+          {
+            status: PaymentStatus.COMPLETED,
+            transactionId: data.TransactionId,
+            paidAt: new Date(),
+            gatewayResponse: data,
+          },
+          { new: true }
+        );
+
+        await this.orderModel.findByIdAndUpdate(order._id, {
+          paymentStatus: PaymentStatus.COMPLETED,
+          status: OrderStatus.CONFIRMED,
+          confirmedAt: new Date(),
+        });
 
         return { success: true, message: 'Payment verified successfully' };
       }

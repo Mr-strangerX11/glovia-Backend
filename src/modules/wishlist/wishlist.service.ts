@@ -1,74 +1,96 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { WishlistItem } from '../../database/schemas/wishlist-item.schema';
+import { Product } from '../../database/schemas/product.schema';
+import { ProductImage } from '../../database/schemas/product-image.schema';
 
 @Injectable()
 export class WishlistService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel(WishlistItem.name) private wishlistModel: Model<WishlistItem>,
+    @InjectModel(Product.name) private productModel: Model<Product>,
+    @InjectModel(ProductImage.name) private productImageModel: Model<ProductImage>,
+  ) {}
 
   async getWishlist(userId: string) {
-    return this.prisma.wishlistItem.findMany({
-      where: { userId },
-      include: {
-        product: {
-          include: {
-            images: {
-              take: 1,
-              orderBy: { displayOrder: 'asc' },
-            },
-            category: {
-              select: { name: true },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const wishlistItems = await this.wishlistModel.find({
+      userId: new Types.ObjectId(userId)
+    }).lean();
+
+    // Get product details and images
+    const productIds = wishlistItems.map(w => w.productId);
+    const [products, images] = await Promise.all([
+      this.productModel.find({ _id: { $in: productIds } }).lean(),
+      this.productImageModel.find({ productId: { $in: productIds } }).lean()
+    ]);
+
+    const productMap = products.reduce((acc, p) => {
+      acc[p._id.toString()] = p;
+      return acc;
+    }, {} as Record<string, any>);
+
+    const imagesByProduct = images.reduce((acc, img) => {
+      const key = img.productId.toString();
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(img);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    return wishlistItems.map(item => ({
+      ...item,
+      product: {
+        ...productMap[item.productId.toString()],
+        images: imagesByProduct[item.productId.toString()] || []
+      }
+    }));
   }
 
-  async addItem(userId: string, productId: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId },
-    });
+  async addToWishlist(userId: string, productId: string) {
+    if (!Types.ObjectId.isValid(productId)) {
+      throw new NotFoundException('Invalid product ID');
+    }
 
+    const product = await this.productModel.findById(productId).lean();
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
-    const existing = await this.prisma.wishlistItem.findUnique({
-      where: {
-        userId_productId: {
-          userId,
-          productId,
-        },
-      },
-    });
+    const userObjId = new Types.ObjectId(userId);
+    const productObjId = new Types.ObjectId(productId);
+
+    const existing = await this.wishlistModel.findOne({
+      userId: userObjId,
+      productId: productObjId
+    }).lean();
 
     if (existing) {
-      return { message: 'Product already in wishlist' };
+      return existing;
     }
 
-    return this.prisma.wishlistItem.create({
-      data: {
-        userId,
-        productId,
-      },
-      include: { product: true },
+    const wishlistItem = new this.wishlistModel({
+      userId: userObjId,
+      productId: productObjId,
     });
+
+    return wishlistItem.save();
   }
 
-  async removeItem(userId: string, itemId: string) {
-    const item = await this.prisma.wishlistItem.findFirst({
-      where: { id: itemId, userId },
+  async removeFromWishlist(userId: string, itemId: string) {
+    if (!Types.ObjectId.isValid(itemId)) {
+      throw new NotFoundException('Invalid item ID');
+    }
+
+    const item = await this.wishlistModel.findOne({
+      _id: new Types.ObjectId(itemId),
+      userId: new Types.ObjectId(userId)
     });
 
     if (!item) {
       throw new NotFoundException('Wishlist item not found');
     }
 
-    await this.prisma.wishlistItem.delete({
-      where: { id: itemId },
-    });
-
+    await this.wishlistModel.deleteOne({ _id: new Types.ObjectId(itemId) });
     return { message: 'Item removed from wishlist' };
   }
 }

@@ -1,20 +1,41 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
 import { CreateOrderDto } from './dto/orders.dto';
-import { OrderStatus, PaymentMethod, PaymentStatus } from '@prisma/client';
+import { OrderStatus, PaymentMethod, PaymentStatus } from '../../database/schemas/order.schema';
 import { ConfigService } from '@nestjs/config';
+import { Order } from '../../database/schemas/order.schema';
+import { OrderItem } from '../../database/schemas/order-item.schema';
+import { Product } from '../../database/schemas/product.schema';
+import { Address } from '../../database/schemas/address.schema';
+import { Payment } from '../../database/schemas/payment.schema';
+import { CartItem } from '../../database/schemas/cart-item.schema';
+import { Coupon } from '../../database/schemas/coupon.schema';
+import { ProductImage } from '../../database/schemas/product-image.schema';
 
 @Injectable()
 export class OrdersService {
   constructor(
-    private prisma: PrismaService,
+    @InjectModel(Order.name) private orderModel: Model<Order>,
+    @InjectModel(OrderItem.name) private orderItemModel: Model<OrderItem>,
+    @InjectModel(Product.name) private productModel: Model<Product>,
+    @InjectModel(Address.name) private addressModel: Model<Address>,
+    @InjectModel(Payment.name) private paymentModel: Model<Payment>,
+    @InjectModel(CartItem.name) private cartItemModel: Model<CartItem>,
+    @InjectModel(Coupon.name) private couponModel: Model<Coupon>,
+    @InjectModel(ProductImage.name) private productImageModel: Model<ProductImage>,
     private configService: ConfigService,
   ) {}
 
   async create(userId: string, dto: CreateOrderDto) {
-    const address = await this.prisma.address.findFirst({
-      where: { id: dto.addressId, userId },
-    });
+    if (!Types.ObjectId.isValid(dto.addressId)) {
+      throw new BadRequestException('Invalid address ID');
+    }
+
+    const address = await this.addressModel.findOne({
+      _id: new Types.ObjectId(dto.addressId),
+      userId: new Types.ObjectId(userId)
+    }).lean();
 
     if (!address) {
       throw new NotFoundException('Address not found');
@@ -26,164 +47,213 @@ export class OrdersService {
 
     const orderNumber = this.generateOrderNumber();
 
-    const items = await Promise.all(
-      dto.items.map(async (item) => {
-        const product = await this.prisma.product.findUnique({
-          where: { id: item.productId },
-        });
+    // Validate and prepare items
+    const items = [];
+    let subtotal = 0;
 
-        if (!product) {
-          throw new NotFoundException(`Product ${item.productId} not found`);
-        }
+    for (const item of dto.items) {
+      if (!Types.ObjectId.isValid(item.productId)) {
+        throw new BadRequestException('Invalid product ID');
+      }
 
-        if (!product.isActive) {
-          throw new BadRequestException(`${product.name} is not available`);
-        }
+      const product = await this.productModel.findById(item.productId).lean();
 
-        if (product.stockQuantity < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient stock for ${product.name}`,
-          );
-        }
+      if (!product) {
+        throw new NotFoundException(`Product not found`);
+      }
 
-        const priceNumber = Number(product.price);
+      if (!product.isActive) {
+        throw new BadRequestException(`${product.name} is not available`);
+      }
 
-        return {
-          productId: product.id,
-          quantity: item.quantity,
-          price: product.price,
-          total: priceNumber * item.quantity,
-        };
-      }),
-    );
+      if (product.stockQuantity < item.quantity) {
+        throw new BadRequestException(
+          `Insufficient stock for ${product.name}`,
+        );
+      }
 
-    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+      const priceNumber = Number(product.price);
+      const itemTotal = priceNumber * item.quantity;
+
+      items.push({
+        productId: product._id,
+        quantity: item.quantity,
+        price: product.price,
+        total: itemTotal,
+      });
+
+      subtotal += itemTotal;
+    }
+
     const deliveryCharge = this.calculateDeliveryCharge(address.district, subtotal);
     const discount = dto.couponCode ? await this.calculateDiscount(dto.couponCode, subtotal) : 0;
     const total = subtotal + deliveryCharge - discount;
 
-    const order = await this.prisma.$transaction(async (tx) => {
-      const createdOrder = await tx.order.create({
-        data: {
-          orderNumber,
-          userId,
-          addressId: dto.addressId,
-          subtotal,
-          discount,
-          deliveryCharge,
-          total,
-          paymentMethod: dto.paymentMethod || PaymentMethod.CASH_ON_DELIVERY,
-          customerNote: dto.note,
-          items: {
-            create: items,
-          },
-        },
-        include: {
-          items: {
-            include: {
-              product: true,
-            },
-          },
-          address: true,
-        },
-      });
-
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            stockQuantity: {
-              decrement: item.quantity,
-            },
-          },
-        });
-      }
-
-      if (createdOrder.paymentMethod === PaymentMethod.CASH_ON_DELIVERY) {
-        await tx.payment.create({
-          data: {
-            orderId: createdOrder.id,
-            method: PaymentMethod.CASH_ON_DELIVERY,
-            amount: total,
-            status: PaymentStatus.PENDING,
-          },
-        });
-      }
-
-      if (dto.clearCart) {
-        await tx.cartItem.deleteMany({
-          where: { userId },
-        });
-      }
-
-      return createdOrder;
+    // Create order
+    const order = new this.orderModel({
+      orderNumber,
+      userId: new Types.ObjectId(userId),
+      addressId: address._id,
+      subtotal,
+      discount,
+      deliveryCharge,
+      total,
+      paymentMethod: dto.paymentMethod || PaymentMethod.CASH_ON_DELIVERY,
+      customerNote: dto.note,
+      status: OrderStatus.PENDING,
     });
 
-    return order;
+    const savedOrder = await order.save();
+
+    // Create order items
+    const orderItems = items.map(item => ({
+      ...item,
+      orderId: savedOrder._id,
+    }));
+
+    await this.orderItemModel.insertMany(orderItems);
+
+    // Update product stock
+    for (const item of items) {
+      await this.productModel.findByIdAndUpdate(
+        item.productId,
+        { $inc: { stockQuantity: -item.quantity } },
+        { new: true }
+      );
+    }
+
+    // Create payment record for COD
+    if (dto.paymentMethod === PaymentMethod.CASH_ON_DELIVERY) {
+      await this.paymentModel.create({
+        orderId: savedOrder._id,
+        method: PaymentMethod.CASH_ON_DELIVERY,
+        amount: total,
+        status: PaymentStatus.PENDING,
+      });
+    }
+
+    // Clear cart if requested
+    if (dto.clearCart) {
+      await this.cartItemModel.deleteMany({
+        userId: new Types.ObjectId(userId)
+      });
+    }
+
+    return this.findOne(userId, savedOrder._id.toString());
   }
 
   async findAll(userId: string, filters?: { status?: OrderStatus }) {
-    const where: any = { userId };
+    const userObjId = new Types.ObjectId(userId);
+    const match: any = { userId: userObjId };
 
     if (filters?.status) {
-      where.status = filters.status;
+      match.status = filters.status;
     }
 
-    return this.prisma.order.findMany({
-      where,
-      include: {
-        items: {
-          include: {
-            product: {
-              include: {
-                images: {
-                  take: 1,
-                  orderBy: { displayOrder: 'asc' },
-                },
-              },
-            },
-          },
-        },
-        address: true,
-        payment: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const orders = await this.orderModel.find(match).sort({ createdAt: -1 }).lean();
+
+    // Get items, addresses, payments
+    const orderIds = orders.map(o => o._id);
+    const [items, payments, addresses] = await Promise.all([
+      this.orderItemModel.find({ orderId: { $in: orderIds } }).lean(),
+      this.paymentModel.find({ orderId: { $in: orderIds } }).lean(),
+      this.addressModel.find({ _id: { $in: orders.map(o => o.addressId) } }).lean(),
+    ]);
+
+    // Get product images
+    const productIds = items.map(i => i.productId);
+    const productImages = await this.productImageModel.find({
+      productId: { $in: productIds }
+    }).lean();
+
+    const imagesByProduct = productImages.reduce((acc, img) => {
+      const key = img.productId.toString();
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(img);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    const itemsByOrder = items.reduce((acc, item) => {
+      const key = item.orderId.toString();
+      if (!acc[key]) acc[key] = [];
+      acc[key].push({
+        ...item,
+        images: imagesByProduct[item.productId.toString()] || []
+      });
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    const paymentsByOrder = payments.reduce((acc, p) => {
+      acc[p.orderId.toString()] = p;
+      return acc;
+    }, {} as Record<string, any>);
+
+    const addressMap = addresses.reduce((acc, a) => {
+      acc[a._id.toString()] = a;
+      return acc;
+    }, {} as Record<string, any>);
+
+    return orders.map(order => ({
+      ...order,
+      items: itemsByOrder[order._id.toString()] || [],
+      address: addressMap[order.addressId.toString()] || null,
+      payment: paymentsByOrder[order._id.toString()] || null,
+    }));
   }
 
   async findOne(userId: string, orderId: string) {
-    const order = await this.prisma.order.findFirst({
-      where: { id: orderId, userId },
-      include: {
-        items: {
-          include: {
-            product: {
-              include: {
-                images: {
-                  take: 1,
-                  orderBy: { displayOrder: 'asc' },
-                },
-              },
-            },
-          },
-        },
-        address: true,
-        payment: true,
-      },
-    });
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Invalid order ID');
+    }
+
+    const order = await this.orderModel.findOne({
+      _id: new Types.ObjectId(orderId),
+      userId: new Types.ObjectId(userId)
+    }).lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    const [items, payment, address] = await Promise.all([
+      this.orderItemModel.find({ orderId: order._id }).lean(),
+      this.paymentModel.findOne({ orderId: order._id }).lean(),
+      this.addressModel.findById(order.addressId).lean(),
+    ]);
+
+    // Get product images
+    const productIds = items.map(i => i.productId);
+    const productImages = await this.productImageModel.find({
+      productId: { $in: productIds }
+    }).lean();
+
+    const imagesByProduct = productImages.reduce((acc, img) => {
+      const key = img.productId.toString();
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(img);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    return {
+      ...order,
+      items: items.map(item => ({
+        ...item,
+        images: imagesByProduct[item.productId.toString()] || []
+      })),
+      address,
+      payment,
+    };
   }
 
   async cancelOrder(userId: string, orderId: string) {
-    const order = await this.prisma.order.findFirst({
-      where: { id: orderId, userId },
-      include: { items: true },
-    });
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Invalid order ID');
+    }
+
+    const order = await this.orderModel.findOne({
+      _id: new Types.ObjectId(orderId),
+      userId: new Types.ObjectId(userId)
+    }).lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -194,28 +264,29 @@ export class OrdersService {
       throw new BadRequestException('Order cannot be cancelled');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const updatedOrder = await tx.order.update({
-        where: { id: orderId },
-        data: {
-          status: OrderStatus.CANCELLED,
-          cancelledAt: new Date(),
-        },
-      });
+    // Get order items
+    const items = await this.orderItemModel.find({ orderId: order._id }).lean();
 
-      for (const item of order.items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            stockQuantity: {
-              increment: item.quantity,
-            },
-          },
-        });
-      }
+    // Update order status
+    const updatedOrder = await this.orderModel.findByIdAndUpdate(
+      orderId,
+      {
+        status: OrderStatus.CANCELLED,
+        cancelledAt: new Date(),
+      },
+      { new: true }
+    ).lean();
 
-      return updatedOrder;
-    });
+    // Restore stock
+    for (const item of items) {
+      await this.productModel.findByIdAndUpdate(
+        item.productId,
+        { $inc: { stockQuantity: item.quantity } },
+        { new: true }
+      );
+    }
+
+    return updatedOrder;
   }
 
   private generateOrderNumber(): string {
@@ -252,9 +323,7 @@ export class OrdersService {
     couponCode: string,
     subtotal: number,
   ): Promise<number> {
-    const coupon = await this.prisma.coupon.findUnique({
-      where: { code: couponCode },
-    });
+    const coupon = await this.couponModel.findOne({ code: couponCode }).lean();
 
     if (!coupon || !coupon.isActive) {
       return 0;
@@ -283,10 +352,11 @@ export class OrdersService {
       discount = Number(coupon.discountValue);
     }
 
-    await this.prisma.coupon.update({
-      where: { id: coupon.id },
-      data: { usageCount: { increment: 1 } },
-    });
+    await this.couponModel.findByIdAndUpdate(
+      coupon._id,
+      { $inc: { usageCount: 1 } },
+      { new: true }
+    );
 
     return discount;
   }

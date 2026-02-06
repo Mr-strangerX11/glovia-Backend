@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
-import { SkinType } from '@prisma/client';
+import { SkinType } from '../../database/schemas/user.schema';
 
 @ApiTags('Products')
 @Controller('products')

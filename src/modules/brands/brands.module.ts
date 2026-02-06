@@ -1,8 +1,18 @@
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
 import { BrandsService } from './brands.service';
 import { BrandsController } from './brands.controller';
+import { BrandSchema, ProductSchema, ProductImageSchema, OrderItemSchema } from '../../database/schemas';
 
 @Module({
+  imports: [
+    MongooseModule.forFeature([
+      { name: 'Brand', schema: BrandSchema },
+      { name: 'Product', schema: ProductSchema },
+      { name: 'ProductImage', schema: ProductImageSchema },
+      { name: 'OrderItem', schema: OrderItemSchema },
+    ]),
+  ],
   controllers: [BrandsController],
   providers: [BrandsService],
   exports: [BrandsService],

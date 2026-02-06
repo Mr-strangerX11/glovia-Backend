@@ -1,10 +1,24 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
-import { Prisma, SkinType } from '@prisma/client';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import {
+  Product,
+  ProductImage,
+  Category,
+  Brand,
+  Review,
+  SkinType,
+} from '../../database/schemas';
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel('Product') private productModel: Model<Product>,
+    @InjectModel('ProductImage') private productImageModel: Model<ProductImage>,
+    @InjectModel('Category') private categoryModel: Model<Category>,
+    @InjectModel('Brand') private brandModel: Model<Brand>,
+    @InjectModel('Review') private reviewModel: Model<Review>,
+  ) {}
 
   async findAll(filters?: {
     search?: string;
@@ -37,38 +51,40 @@ export class ProductsService {
       sortOrder = 'desc',
     } = filters || {};
 
-    const where: Prisma.ProductWhereInput = {
+    const where: Record<string, unknown> = {
       isActive: true,
     };
 
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-        { tags: { has: search } },
+      const regex = new RegExp(search, 'i');
+      where.$or = [
+        { name: regex },
+        { description: regex },
+        { tags: search },
       ];
     }
 
     if (categoryId) {
-      where.categoryId = categoryId;
+      where.categoryId = new Types.ObjectId(categoryId);
     }
 
     if (brandId) {
-      where.brandId = brandId;
+      where.brandId = new Types.ObjectId(brandId);
     }
 
     if (skinType) {
-      where.suitableFor = { has: skinType };
+      where.suitableFor = skinType;
     }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
-      where.price = {};
+      const priceFilter: Record<string, number> = {};
       if (minPrice !== undefined) {
-        where.price.gte = minPrice;
+        priceFilter.$gte = minPrice;
       }
       if (maxPrice !== undefined) {
-        where.price.lte = maxPrice;
+        priceFilter.$lte = maxPrice;
       }
+      where.price = priceFilter;
     }
 
     if (isFeatured !== undefined) {
@@ -80,59 +96,89 @@ export class ProductsService {
     }
 
     if (isNew !== undefined) {
-      where.isNew = isNew;
+      where.isNewProduct = isNew;
     }
 
     const skip = (page - 1) * limit;
+    const sortValue = sortOrder === 'asc' ? 1 : -1;
 
     const [products, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
-        include: {
-          images: {
-            orderBy: { displayOrder: 'asc' },
-            take: 1,
-          },
-          category: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-            },
-          },
-          brand: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-            },
-          },
-          reviews: {
-            select: {
-              rating: true,
-            },
-          },
-        },
-        orderBy: { [sortBy]: sortOrder },
-        skip,
-        take: limit,
-      }),
-      this.prisma.product.count({ where }),
+      this.productModel
+        .find(where)
+        .sort({ [sortBy]: sortValue })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.productModel.countDocuments(where),
     ]);
 
-    const productsWithRatings = products.map((product) => {
-      const avgRating =
-        product.reviews.length > 0
-          ? product.reviews.reduce((acc, r) => acc + r.rating, 0) /
-            product.reviews.length
-          : 0;
+    const productIds = products.map((product) => product._id);
 
-      const { reviews, ...productData } = product;
+    const [images, categories, brands, reviewStats] = await Promise.all([
+      this.productImageModel
+        .find({ productId: { $in: productIds } })
+        .sort({ displayOrder: 1 })
+        .lean(),
+      this.categoryModel
+        .find({ _id: { $in: products.map((p) => p.categoryId) } })
+        .select('_id name slug')
+        .lean(),
+      this.brandModel
+        .find({ _id: { $in: products.map((p) => p.brandId).filter(Boolean) } })
+        .select('_id name slug')
+        .lean(),
+      this.reviewModel
+        .aggregate([
+          {
+            $match: {
+              productId: { $in: productIds },
+            },
+          },
+          {
+            $group: {
+              _id: '$productId',
+              averageRating: { $avg: '$rating' },
+              reviewCount: { $sum: 1 },
+            },
+          },
+        ]),
+    ]);
+
+    const firstImageByProductId = images.reduce<Record<string, any>>((acc, image) => {
+      const key = image.productId.toString();
+      if (!acc[key]) {
+        acc[key] = image;
+      }
+      return acc;
+    }, {});
+
+    const categoryById = categories.reduce<Record<string, any>>((acc, category) => {
+      acc[category._id.toString()] = category;
+      return acc;
+    }, {});
+
+    const brandById = brands.reduce<Record<string, any>>((acc, brand) => {
+      acc[brand._id.toString()] = brand;
+      return acc;
+    }, {});
+
+    const reviewStatsByProductId = reviewStats.reduce<Record<string, any>>((acc, stat) => {
+      acc[stat._id.toString()] = stat;
+      return acc;
+    }, {});
+
+    const productsWithRatings = products.map((product) => {
+      const stats = reviewStatsByProductId[product._id.toString()];
+      const averageRating = stats ? Number(stats.averageRating.toFixed(1)) : 0;
+      const reviewCount = stats ? stats.reviewCount : 0;
 
       return {
-        ...productData,
-        averageRating: Number(avgRating.toFixed(1)),
-        reviewCount: reviews.length,
+        ...product,
+        images: firstImageByProductId[product._id.toString()] ? [firstImageByProductId[product._id.toString()]] : [],
+        category: categoryById[product.categoryId?.toString()],
+        brand: product.brandId ? brandById[product.brandId.toString()] : null,
+        averageRating,
+        reviewCount,
       };
     });
 
@@ -148,108 +194,151 @@ export class ProductsService {
   }
 
   async findBySlug(slug: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { slug, isActive: true },
-      include: {
-        images: {
-          orderBy: { displayOrder: 'asc' },
-        },
-        category: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-        brand: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            logo: true,
-          },
-        },
-        reviews: {
-          where: { isApproved: true },
-          include: {
-            user: {
-              select: {
-                firstName: true,
-                lastName: true,
-                profileImage: true,
-              },
-            },
-          },
-          orderBy: { createdAt: 'desc' },
-        },
-      },
-    });
+    const product = await this.productModel
+      .findOne({ slug, isActive: true })
+      .lean();
 
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
+    const [images, category, brand, reviews] = await Promise.all([
+      this.productImageModel
+        .find({ productId: product._id })
+        .sort({ displayOrder: 1 })
+        .lean(),
+      this.categoryModel
+        .findById(product.categoryId)
+        .select('_id name slug')
+        .lean(),
+      product.brandId
+        ? this.brandModel
+            .findById(product.brandId)
+            .select('_id name slug logo')
+            .lean()
+        : null,
+      this.reviewModel
+        .find({ productId: product._id, isApproved: true })
+        .sort({ createdAt: -1 })
+        .populate({
+          path: 'userId',
+          model: 'User',
+          select: 'firstName lastName profileImage',
+        })
+        .lean(),
+    ]);
+
     const avgRating =
-      product.reviews.length > 0
-        ? product.reviews.reduce((acc, r) => acc + r.rating, 0) /
-          product.reviews.length
+      reviews.length > 0
+        ? reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length
         : 0;
 
     return {
       ...product,
+      images,
+      category,
+      brand,
+      reviews: reviews.map((review) => ({
+        ...review,
+        user: review.userId,
+      })),
       averageRating: Number(avgRating.toFixed(1)),
-      reviewCount: product.reviews.length,
+      reviewCount: reviews.length,
     };
   }
 
   async getFeaturedProducts(limit = 8) {
-    const products = await this.prisma.product.findMany({
-      where: { isActive: true, isFeatured: true },
-      include: {
-        images: {
-          orderBy: { displayOrder: 'asc' },
-          take: 1,
-        },
-        category: {
-          select: { name: true },
-        },
-      },
-      take: limit,
-      orderBy: { createdAt: 'desc' },
-    });
+    const products = await this.productModel
+      .find({ isActive: true, isFeatured: true })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
 
-    return products;
+    const productIds = products.map((product) => product._id);
+    const [images, categories] = await Promise.all([
+      this.productImageModel
+        .find({ productId: { $in: productIds } })
+        .sort({ displayOrder: 1 })
+        .lean(),
+      this.categoryModel
+        .find({ _id: { $in: products.map((p) => p.categoryId) } })
+        .select('_id name')
+        .lean(),
+    ]);
+
+    const firstImageByProductId = images.reduce<Record<string, any>>((acc, image) => {
+      const key = image.productId.toString();
+      if (!acc[key]) {
+        acc[key] = image;
+      }
+      return acc;
+    }, {});
+
+    const categoryById = categories.reduce<Record<string, any>>((acc, category) => {
+      acc[category._id.toString()] = category;
+      return acc;
+    }, {});
+
+    return products.map((product) => ({
+      ...product,
+      images: firstImageByProductId[product._id.toString()] ? [firstImageByProductId[product._id.toString()]] : [],
+      category: categoryById[product.categoryId?.toString()],
+    }));
   }
 
   async getBestSellers(limit = 8) {
-    const products = await this.prisma.product.findMany({
-      where: { isActive: true, isBestSeller: true },
-      include: {
-        images: {
-          orderBy: { displayOrder: 'asc' },
-          take: 1,
-        },
-      },
-      take: limit,
-    });
+    const products = await this.productModel
+      .find({ isActive: true, isBestSeller: true })
+      .limit(limit)
+      .lean();
 
-    return products;
+    const productIds = products.map((product) => product._id);
+    const images = await this.productImageModel
+      .find({ productId: { $in: productIds } })
+      .sort({ displayOrder: 1 })
+      .lean();
+
+    const firstImageByProductId = images.reduce<Record<string, any>>((acc, image) => {
+      const key = image.productId.toString();
+      if (!acc[key]) {
+        acc[key] = image;
+      }
+      return acc;
+    }, {});
+
+    return products.map((product) => ({
+      ...product,
+      images: firstImageByProductId[product._id.toString()] ? [firstImageByProductId[product._id.toString()]] : [],
+    }));
   }
 
   async getRelatedProducts(productId: string, categoryId: string, limit = 4) {
-    return this.prisma.product.findMany({
-      where: {
-        id: { not: productId },
-        categoryId,
+    const products = await this.productModel
+      .find({
+        _id: { $ne: new Types.ObjectId(productId) },
+        categoryId: new Types.ObjectId(categoryId),
         isActive: true,
-      },
-      include: {
-        images: {
-          orderBy: { displayOrder: 'asc' },
-          take: 1,
-        },
-      },
-      take: limit,
-    });
+      })
+      .limit(limit)
+      .lean();
+
+    const productIds = products.map((product) => product._id);
+    const images = await this.productImageModel
+      .find({ productId: { $in: productIds } })
+      .sort({ displayOrder: 1 })
+      .lean();
+
+    const firstImageByProductId = images.reduce<Record<string, any>>((acc, image) => {
+      const key = image.productId.toString();
+      if (!acc[key]) {
+        acc[key] = image;
+      }
+      return acc;
+    }, {});
+
+    return products.map((product) => ({
+      ...product,
+      images: firstImageByProductId[product._id.toString()] ? [firstImageByProductId[product._id.toString()]] : [],
+    }));
   }
 }

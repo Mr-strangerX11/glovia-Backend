@@ -1,21 +1,24 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Blog } from '../../database/schemas/blog.schema';
 
 @Injectable()
 export class BlogsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectModel(Blog.name) private blogModel: Model<Blog>,
+  ) {}
 
   async findAll(page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
     const [blogs, total] = await Promise.all([
-      this.prisma.blog.findMany({
-        where: { isPublished: true },
-        orderBy: { publishedAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.blog.count({ where: { isPublished: true } }),
+      this.blogModel.find({ isPublished: true })
+        .sort({ publishedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.blogModel.countDocuments({ isPublished: true }),
     ]);
 
     return {
@@ -30,9 +33,10 @@ export class BlogsService {
   }
 
   async findBySlug(slug: string) {
-    const blog = await this.prisma.blog.findUnique({
-      where: { slug, isPublished: true },
-    });
+    const blog = await this.blogModel.findOne({
+      slug,
+      isPublished: true,
+    }).lean();
 
     if (!blog) {
       throw new NotFoundException('Blog not found');
