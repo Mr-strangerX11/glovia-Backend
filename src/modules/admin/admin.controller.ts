@@ -15,6 +15,7 @@ import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { UserRole } from '../../database/schemas/user.schema';
 import { OrderStatus } from '../../database/schemas/order.schema';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
@@ -158,6 +159,7 @@ export class AdminController {
   }
 
   @Post('init')
+  @Public()
   @ApiOperation({ summary: 'Initialize default users (Super Admin, Admin, Vendor, User)' })
   async initializeUsers() {
     const result = await this.adminService.seedInitialUsers();

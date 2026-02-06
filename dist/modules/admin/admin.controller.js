@@ -19,6 +19,7 @@ const admin_service_1 = require("./admin.service");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 const roles_guard_1 = require("../../common/guards/roles.guard");
 const roles_decorator_1 = require("../../common/decorators/roles.decorator");
+const public_decorator_1 = require("../../common/decorators/public.decorator");
 const user_schema_1 = require("../../database/schemas/user.schema");
 const product_dto_1 = require("./dto/product.dto");
 const user_dto_1 = require("./dto/user.dto");
@@ -235,6 +236,7 @@ __decorate([
 ], AdminController.prototype, "updateAnnouncement", null);
 __decorate([
     (0, common_1.Post)('init'),
+    (0, public_decorator_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Initialize default users (Super Admin, Admin, Vendor, User)' }),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
