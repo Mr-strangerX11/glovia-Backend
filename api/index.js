@@ -12,6 +12,30 @@ let cachedHandler = null;
 
 async function createHandler() {
   const expressApp = express();
+  
+  // Set CORS headers immediately for all requests
+  expressApp.use((req, res, next) => {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://glovia.com.np',
+      'https://www.glovia.com.np',
+    ];
+    
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+    
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    next();
+  });
+  
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
   const configService = app.get(ConfigService);
 
@@ -30,7 +54,7 @@ async function createHandler() {
           'https://www.glovia.com.np',
         ];
 
-  // Configure CORS first, before helmet
+  // Configure CORS in NestJS (backup for routes after global prefix)
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
