@@ -5,10 +5,14 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
 var OtpService_1, EmailOtpService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EmailOtpService = exports.OtpService = void 0;
 const common_1 = require("@nestjs/common");
+const nodemailer = require("nodemailer");
 let OtpService = OtpService_1 = class OtpService {
     constructor() {
         this.logger = new common_1.Logger(OtpService_1.name);
@@ -88,10 +92,23 @@ let EmailOtpService = EmailOtpService_1 = class EmailOtpService {
     constructor() {
         this.logger = new common_1.Logger(EmailOtpService_1.name);
         this.provider = process.env.EMAIL_PROVIDER || 'mock';
+        if (this.provider === 'smtp') {
+            this.transporter = nodemailer.createTransport({
+                host: process.env.SMTP_HOST,
+                port: parseInt(process.env.SMTP_PORT || '587'),
+                secure: process.env.SMTP_SECURE === 'true',
+                auth: {
+                    user: process.env.SMTP_USER,
+                    pass: process.env.SMTP_PASSWORD,
+                },
+            });
+        }
     }
     async sendEmailOtp(email, otp, purpose) {
         try {
             switch (this.provider) {
+                case 'smtp':
+                    return await this.sendViaSMTP(email, otp, purpose);
                 case 'sendgrid':
                     return await this.sendViaSendGrid(email, otp, purpose);
                 case 'ses':
@@ -103,6 +120,27 @@ let EmailOtpService = EmailOtpService_1 = class EmailOtpService {
         }
         catch (error) {
             this.logger.error(`Failed to send email OTP to ${email}:`, error);
+            return false;
+        }
+    }
+    async sendViaSMTP(email, otp, purpose) {
+        if (!this.transporter) {
+            this.logger.warn('SMTP transporter not configured');
+            return false;
+        }
+        const { subject, html } = this.buildEmailContent(otp, purpose);
+        try {
+            const info = await this.transporter.sendMail({
+                from: `"${process.env.SMTP_FROM_NAME || 'Glovia Nepal'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
+                to: email,
+                subject,
+                html,
+            });
+            this.logger.log(`Email sent: ${info.messageId}`);
+            return true;
+        }
+        catch (error) {
+            this.logger.error('SMTP error:', error);
             return false;
         }
     }
@@ -183,6 +221,7 @@ let EmailOtpService = EmailOtpService_1 = class EmailOtpService {
 };
 exports.EmailOtpService = EmailOtpService;
 exports.EmailOtpService = EmailOtpService = EmailOtpService_1 = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [])
 ], EmailOtpService);
 //# sourceMappingURL=otp.service.js.map

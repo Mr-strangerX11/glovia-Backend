@@ -11,7 +11,10 @@ export declare class OtpService {
 export declare class EmailOtpService {
     private readonly logger;
     private readonly provider;
+    private transporter;
+    constructor();
     sendEmailOtp(email: string, otp: string, purpose: string): Promise<boolean>;
+    private sendViaSMTP;
     private sendViaSendGrid;
     private sendViaSES;
     private sendViaMock;

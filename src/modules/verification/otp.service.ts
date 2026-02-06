@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import * as nodemailer from 'nodemailer';
+import { Transporter } from 'nodemailer';
 
 /**
  * OTP Service abstraction
@@ -110,12 +112,28 @@ export class OtpService {
 
 /**
  * Email OTP Service
- * Handles OTP delivery via email (mock in dev, SendGrid/SES in prod)
+ * Handles OTP delivery via email (SMTP, SendGrid, SES, or mock)
  */
 @Injectable()
 export class EmailOtpService {
   private readonly logger = new Logger(EmailOtpService.name);
-  private readonly provider = process.env.EMAIL_PROVIDER || 'mock'; // 'sendgrid', 'ses', 'mock'
+  private readonly provider = process.env.EMAIL_PROVIDER || 'mock'; // 'smtp', 'sendgrid', 'ses', 'mock'
+  private transporter: Transporter;
+
+  constructor() {
+    // Initialize SMTP transporter if provider is smtp
+    if (this.provider === 'smtp') {
+      this.transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: process.env.SMTP_SECURE === 'true', // true for 465, false for 587
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASSWORD,
+        },
+      });
+    }
+  }
 
   /**
    * Send OTP via email
@@ -123,6 +141,8 @@ export class EmailOtpService {
   async sendEmailOtp(email: string, otp: string, purpose: string): Promise<boolean> {
     try {
       switch (this.provider) {
+        case 'smtp':
+          return await this.sendViaSMTP(email, otp, purpose);
         case 'sendgrid':
           return await this.sendViaSendGrid(email, otp, purpose);
         case 'ses':
@@ -133,6 +153,33 @@ export class EmailOtpService {
       }
     } catch (error) {
       this.logger.error(`Failed to send email OTP to ${email}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * SMTP email integration (Gmail, Outlook, etc.)
+   */
+  private async sendViaSMTP(email: string, otp: string, purpose: string): Promise<boolean> {
+    if (!this.transporter) {
+      this.logger.warn('SMTP transporter not configured');
+      return false;
+    }
+
+    const { subject, html } = this.buildEmailContent(otp, purpose);
+
+    try {
+      const info = await this.transporter.sendMail({
+        from: `"${process.env.SMTP_FROM_NAME || 'Glovia Nepal'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
+        to: email,
+        subject,
+        html,
+      });
+
+      this.logger.log(`Email sent: ${info.messageId}`);
+      return true;
+    } catch (error) {
+      this.logger.error('SMTP error:', error);
       return false;
     }
   }
