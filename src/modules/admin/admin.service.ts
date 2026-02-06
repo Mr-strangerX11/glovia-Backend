@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { User, UserRole } from '../../database/schemas/user.schema';
 import { Product } from '../../database/schemas/product.schema';
 import { Order, OrderStatus } from '../../database/schemas/order.schema';
