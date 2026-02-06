@@ -60,6 +60,19 @@ async function createHandler() {
   const apiPrefix = configService.get('API_PREFIX') || 'api/v1';
   app.setGlobalPrefix(apiPrefix);
 
+  // Root health endpoint (before global prefix)
+  expressApp.get('/', (req, res) => {
+    res.json({
+      status: 'ok',
+      message: 'Glovia Nepal Backend API',
+      version: '1.0.0',
+      endpoints: {
+        api: `/${apiPrefix}`,
+        docs: process.env.NODE_ENV !== 'production' ? '/api/docs' : 'disabled',
+      },
+    });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
       .setTitle('Glovia Nepal API')
