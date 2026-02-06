@@ -65,7 +65,7 @@ export class Product extends Document {
   isBestSeller: boolean;
 
   @Prop({ default: false })
-  isNew: boolean;
+  isNewProduct: boolean;
 
   @Prop()
   metaTitle?: string;

@@ -1,5 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { User, Address, Order, OtpVerification } from '../../database/schemas';
 import { OtpService } from './otp.service';
 import { SendOtpDto, OtpPurpose } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -7,7 +9,10 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 @Injectable()
 export class VerificationService {
   constructor(
-    private prisma: PrismaService,
+    @InjectModel('User') private userModel: Model<User>,
+    @InjectModel('Address') private addressModel: Model<Address>,
+    @InjectModel('Order') private orderModel: Model<Order>,
+    @InjectModel('OtpVerification') private otpModel: Model<OtpVerification>,
     private otpService: OtpService,
   ) {}
 
@@ -24,7 +29,7 @@ export class VerificationService {
    * Verify email using token
    */
   async verifyEmail(userId: string): Promise<{ message: string; trustScore: number }> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.userModel.findById(userId).lean();
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -34,13 +39,16 @@ export class VerificationService {
       return { message: 'Email already verified', trustScore: user.trustScore };
     }
 
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        isEmailVerified: true,
-        trustScore: { increment: 20 },
-      },
-    });
+    const updatedUser = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        {
+          isEmailVerified: true,
+          $inc: { trustScore: 20 },
+        },
+        { new: true }
+      )
+      .lean();
 
     return {
       message: 'Email verified successfully',
@@ -55,25 +63,25 @@ export class VerificationService {
     const { phone, purpose } = dto;
 
     // Find user by phone
-    const user = await this.prisma.user.findUnique({ where: { phone } });
+    const user = await this.userModel.findOne({ phone }).lean();
 
     if (!user && !userId) {
       throw new NotFoundException('User not found');
     }
 
-    const targetUserId = userId || user.id;
+    const targetUserId = userId || user._id.toString();
 
     // Check for existing pending OTP
-    const existingOtp = await this.prisma.otpVerification.findFirst({
-      where: {
-        userId: targetUserId,
+    const existingOtp = await this.otpModel
+      .findOne({
+        userId: new Types.ObjectId(targetUserId),
         phone,
         purpose,
-        expiresAt: { gt: new Date() },
+        expiresAt: { $gt: new Date() },
         isVerified: false,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+      })
+      .sort({ createdAt: -1 })
+      .lean();
 
     // Rate limiting: max 1 OTP per minute
     if (existingOtp) {
@@ -88,14 +96,12 @@ export class VerificationService {
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     // Save OTP
-    await this.prisma.otpVerification.create({
-      data: {
-        userId: targetUserId,
-        phone,
-        otp,
-        purpose,
-        expiresAt,
-      },
+    await this.otpModel.create({
+      userId: new Types.ObjectId(targetUserId),
+      phone,
+      otp,
+      purpose,
+      expiresAt,
     });
 
     // Send OTP
@@ -115,29 +121,28 @@ export class VerificationService {
     const { phone, otp } = dto;
 
     // Find user
-    const user = await this.prisma.user.findUnique({ where: { phone } });
+    const user = await this.userModel.findOne({ phone }).lean();
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
     // Find matching OTP
-    const otpRecord = await this.prisma.otpVerification.findFirst({
-      where: {
-        userId: user.id,
+    const otpRecord = await this.otpModel
+      .findOne({
+        userId: new Types.ObjectId(user._id.toString()),
         phone,
         otp,
         isVerified: false,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        expiresAt: { $gt: new Date() },
+      })
+      .sort({ createdAt: -1 })
+      .lean();
 
     if (!otpRecord) {
       // Increment failed attempts
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { failedAttempts: { increment: 1 } },
+      await this.userModel.findByIdAndUpdate(user._id, {
+        $inc: { failedAttempts: 1 },
       });
 
       throw new BadRequestException('Invalid or expired OTP');
@@ -149,20 +154,22 @@ export class VerificationService {
     }
 
     // Mark OTP as verified
-    await this.prisma.otpVerification.update({
-      where: { id: otpRecord.id },
-      data: { isVerified: true },
+    await this.otpModel.findByIdAndUpdate(otpRecord._id, {
+      isVerified: true,
     });
 
     // Update user: verify phone and increase trust score
-    const updatedUser = await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        isPhoneVerified: true,
-        trustScore: { increment: 30 },
-        failedAttempts: 0,
-      },
-    });
+    const updatedUser = await this.userModel
+      .findByIdAndUpdate(
+        user._id,
+        {
+          isPhoneVerified: true,
+          $inc: { trustScore: 30 },
+          failedAttempts: 0,
+        },
+        { new: true }
+      )
+      .lean();
 
     return {
       message: 'Phone verified successfully',
@@ -174,25 +181,30 @@ export class VerificationService {
    * Increment trust score for address verification
    */
   async verifyAddress(userId: string, addressId: string): Promise<{ message: string; trustScore: number }> {
-    const address = await this.prisma.address.findFirst({
-      where: { id: addressId, userId },
-    });
+    const address = await this.addressModel
+      .findOne({
+        _id: new Types.ObjectId(addressId),
+        userId: new Types.ObjectId(userId),
+      })
+      .lean();
 
     if (!address) {
       throw new NotFoundException('Address not found');
     }
 
     // Mark address as verified
-    await this.prisma.address.update({
-      where: { id: addressId },
-      data: { isVerified: true },
+    await this.addressModel.findByIdAndUpdate(addressId, {
+      isVerified: true,
     });
 
     // Increment trust score
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: { trustScore: { increment: 20 } },
-    });
+    const updatedUser = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $inc: { trustScore: 20 } },
+        { new: true }
+      )
+      .lean();
 
     return {
       message: 'Address verified successfully',
@@ -204,25 +216,31 @@ export class VerificationService {
    * Confirm delivery (final trust boost)
    */
   async confirmDelivery(userId: string, orderId: string): Promise<{ message: string; trustScore: number }> {
-    const order = await this.prisma.order.findFirst({
-      where: { id: orderId, userId },
-    });
+    const order = await this.orderModel
+      .findOne({
+        _id: new Types.ObjectId(orderId),
+        userId: new Types.ObjectId(userId),
+      })
+      .lean();
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
     // Mark all user addresses as verified after successful delivery
-    await this.prisma.address.updateMany({
-      where: { userId },
-      data: { isVerified: true },
-    });
+    await this.addressModel.updateMany(
+      { userId: new Types.ObjectId(userId) },
+      { isVerified: true }
+    );
 
     // Big trust boost for completed delivery
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: { trustScore: { increment: 30 } },
-    });
+    const updatedUser = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $inc: { trustScore: 30 } },
+        { new: true }
+      )
+      .lean();
 
     return {
       message: 'Delivery confirmed. User marked as genuine.',

@@ -23,6 +23,10 @@ export class OtpVerification extends Document {
 
   @Prop({ default: 0 })
   attempts: number;
+
+  // Timestamps are added automatically by @Schema({ timestamps: true })
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const OtpVerificationSchema = SchemaFactory.createForClass(OtpVerification);
