@@ -1,0 +1,128 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CategoriesService = void 0;
+const common_1 = require("@nestjs/common");
+const mongoose_1 = require("@nestjs/mongoose");
+const mongoose_2 = require("mongoose");
+let CategoriesService = class CategoriesService {
+    constructor(categoryModel, productModel, productImageModel) {
+        this.categoryModel = categoryModel;
+        this.productModel = productModel;
+        this.productImageModel = productImageModel;
+    }
+    async findAll() {
+        const categories = await this.categoryModel
+            .find({ isActive: true })
+            .sort({ displayOrder: 1 })
+            .lean();
+        const categoryIds = categories.map((category) => category._id);
+        const [children, productCounts] = await Promise.all([
+            this.categoryModel
+                .find({
+                parentId: { $in: categoryIds },
+                isActive: true,
+            })
+                .sort({ displayOrder: 1 })
+                .lean(),
+            this.productModel
+                .aggregate([
+                {
+                    $match: {
+                        isActive: true,
+                        categoryId: { $in: categoryIds },
+                    },
+                },
+                {
+                    $group: {
+                        _id: '$categoryId',
+                        count: { $sum: 1 },
+                    },
+                },
+            ]),
+        ]);
+        const childrenByParentId = children.reduce((acc, child) => {
+            const key = child.parentId?.toString();
+            if (!key) {
+                return acc;
+            }
+            if (!acc[key]) {
+                acc[key] = [];
+            }
+            acc[key].push(child);
+            return acc;
+        }, {});
+        const countsByCategoryId = productCounts.reduce((acc, item) => {
+            acc[item._id.toString()] = item.count;
+            return acc;
+        }, {});
+        return categories.map((category) => ({
+            ...category,
+            children: childrenByParentId[category._id.toString()] || [],
+            _count: { products: countsByCategoryId[category._id.toString()] || 0 },
+        }));
+    }
+    async findBySlug(slug) {
+        const category = await this.categoryModel
+            .findOne({ slug, isActive: true })
+            .lean();
+        if (!category) {
+            throw new common_1.NotFoundException('Category not found');
+        }
+        const [children, products] = await Promise.all([
+            this.categoryModel
+                .find({ parentId: new mongoose_2.Types.ObjectId(category._id), isActive: true })
+                .sort({ displayOrder: 1 })
+                .lean(),
+            this.productModel
+                .find({ categoryId: new mongoose_2.Types.ObjectId(category._id), isActive: true })
+                .limit(12)
+                .lean(),
+        ]);
+        const productIds = products.map((product) => product._id);
+        const images = await this.productImageModel
+            .find({ productId: { $in: productIds } })
+            .sort({ displayOrder: 1 })
+            .lean();
+        const firstImageByProductId = images.reduce((acc, image) => {
+            const key = image.productId.toString();
+            if (!acc[key]) {
+                acc[key] = image;
+            }
+            return acc;
+        }, {});
+        const productsWithImages = products.map((product) => ({
+            ...product,
+            images: firstImageByProductId[product._id.toString()]
+                ? [firstImageByProductId[product._id.toString()]]
+                : [],
+        }));
+        return {
+            ...category,
+            children,
+            products: productsWithImages,
+        };
+    }
+};
+exports.CategoriesService = CategoriesService;
+exports.CategoriesService = CategoriesService = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, mongoose_1.InjectModel)('Category')),
+    __param(1, (0, mongoose_1.InjectModel)('Product')),
+    __param(2, (0, mongoose_1.InjectModel)('ProductImage')),
+    __metadata("design:paramtypes", [mongoose_2.Model,
+        mongoose_2.Model,
+        mongoose_2.Model])
+], CategoriesService);
+//# sourceMappingURL=categories.service.js.map
