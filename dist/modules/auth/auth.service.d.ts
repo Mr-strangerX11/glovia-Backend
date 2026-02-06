@@ -17,6 +17,7 @@ export declare class AuthService {
         message: string;
         userId: string;
         email: string;
+        otp: string;
         isEmailVerified: boolean;
     }>;
     login(dto: LoginDto, ipAddress?: string): Promise<{
