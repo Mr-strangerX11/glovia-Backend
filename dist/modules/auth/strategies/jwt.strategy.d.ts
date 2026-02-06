@@ -7,10 +7,36 @@ export declare class JwtStrategy extends JwtStrategy_base {
     private configService;
     private userModel;
     constructor(configService: ConfigService, userModel: Model<User>);
-    validate(payload: any): Promise<User & Required<{
+    validate(payload: any): Promise<{
+        email: string;
+        phone?: string;
+        password: string;
+        firstName: string;
+        lastName: string;
+        role: import("../../../database/schemas/user.schema").UserRole;
+        isEmailVerified: boolean;
+        isPhoneVerified: boolean;
+        skinType?: import("../../../database/schemas/user.schema").SkinType;
+        profileImage?: string;
+        refreshToken?: string;
+        trustScore: number;
+        deviceFingerprint?: string;
+        ipAddress?: string;
+        failedAttempts: number;
+        isBlocked: boolean;
+        lastLoginAt?: Date;
         _id: Types.ObjectId;
-    }> & {
+        $locals: Record<string, unknown>;
+        $op: "save" | "validate" | "remove" | null;
+        $where: Record<string, unknown>;
+        baseModelName?: string;
+        collection: import("mongoose").Collection;
+        db: import("mongoose").Connection;
+        errors?: import("mongoose").Error.ValidationError;
+        isNew: boolean;
+        schema: import("mongoose").Schema;
         __v: number;
+        id: string;
     }>;
 }
 export {};

@@ -24,6 +24,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       .select('email phone firstName lastName role profileImage')
       .lean();
 
-    return user;
+    if (!user) {
+      return null;
+    }
+
+    return {
+      id: user._id?.toString(),
+      ...user,
+    };
   }
 }

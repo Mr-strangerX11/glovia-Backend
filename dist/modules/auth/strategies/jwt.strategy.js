@@ -34,7 +34,13 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
         const user = await this.userModel.findById(new mongoose_2.Types.ObjectId(payload.sub))
             .select('email phone firstName lastName role profileImage')
             .lean();
-        return user;
+        if (!user) {
+            return null;
+        }
+        return {
+            id: user._id?.toString(),
+            ...user,
+        };
     }
 };
 exports.JwtStrategy = JwtStrategy;
